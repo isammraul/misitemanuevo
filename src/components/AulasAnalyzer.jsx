@@ -451,7 +451,6 @@ export default function AulasAnalyzer() {
   const getCellStyle = (count) => {
     if (count === 0) return 'bg-green-100 text-green-800 font-semibold';
     if (count === 1) return 'bg-yellow-100 text-yellow-800';
-    if (count === 2) return 'bg-orange-100 text-orange-800';
     return 'bg-red-100 text-red-800';
   };
 
@@ -476,9 +475,9 @@ export default function AulasAnalyzer() {
     if (filterStatus === 'libres') {
       filtered = filtered.filter(row => row.totalClases === 0);
     } else if (filterStatus === 'ocupadas') {
-      filtered = filtered.filter(row => row.totalClases > 0);
+      filtered = filtered.filter(row => row.totalClases > 1);
     } else if (filterStatus === 'disponibles') {
-      filtered = filtered.filter(row => row.diasLibres > 0 && row.totalClases > 0);
+      filtered = filtered.filter(row => row.totalClases === 1);
     }
     
     return filtered;
@@ -641,9 +640,9 @@ export default function AulasAnalyzer() {
                     className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="todos">Todas las aulas</option>
-                    <option value="libres">Solo libres</option>
-                    <option value="ocupadas">Solo ocupadas</option>
-                    <option value="disponibles">Parcialmente disponibles</option>
+                    <option value="libres">Solo libres (0 clases)</option>
+                    <option value="disponibles">Parcialmente disponibles (1 clase)</option>
+                    <option value="ocupadas">Ocupadas (2+ clases)</option>
                   </select>
 
                   {/* Filtro de turno */}
@@ -694,19 +693,15 @@ export default function AulasAnalyzer() {
               <div className="flex gap-4 text-sm mb-4 flex-wrap">
                 <div className="flex items-center gap-2">
                   <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
-                  <span>Libre (0)</span>
+                  <span>Libre (0 clases)</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-4 h-4 bg-yellow-100 border border-yellow-300 rounded"></div>
                   <span>1 clase</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-orange-100 border border-orange-300 rounded"></div>
-                  <span>2 clases</span>
-                </div>
-                <div className="flex items-center gap-2">
                   <div className="w-4 h-4 bg-red-100 border border-red-300 rounded"></div>
-                  <span>3+ clases</span>
+                  <span>2+ clases</span>
                 </div>
               </div>
 
@@ -759,7 +754,7 @@ export default function AulasAnalyzer() {
               </div>
 
               {/* Información adicional */}
-              <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className={`mt-6 border rounded-lg p-4 ${results.dates.length <= 1 ? 'bg-yellow-50 border-yellow-300' : 'bg-blue-50 border-blue-200'}`}>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-gray-700">
@@ -771,6 +766,11 @@ export default function AulasAnalyzer() {
                         selectedTurno === 'tarde' ? 'Tarde' : 'Noche'
                       }
                     </p>
+                    {results.dates.length <= 1 && (
+                      <p className="text-xs text-yellow-700 mt-2">
+                        ⚠️ Solo se detectó 1 día. Verifica que tu archivo tenga datos de múltiples fechas.
+                      </p>
+                    )}
                   </div>
                   {gistId && (
                     <div className="text-right">
