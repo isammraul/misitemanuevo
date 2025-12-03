@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Download, RefreshCw } from 'lucide-react';
+import { Upload, Download, RefreshCw, Search, Filter, TrendingUp, Calendar, Share2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 
@@ -10,6 +10,10 @@ export default function AulasAnalyzer() {
   const [selectedTurno, setSelectedTurno] = useState('todos');
   const [uploadDateTime, setUploadDateTime] = useState(null);
   const [loadingStorage, setLoadingStorage] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState('todos');
+  const [showStats, setShowStats] = useState(true);
+  const [gistId, setGistId] = useState(null);
 
   const PREDEFINED_AULAS = [
     'isamzoom2022@gmail.com',
@@ -96,6 +100,13 @@ export default function AulasAnalyzer() {
 
   useEffect(() => {
     loadDataFromStorage();
+    
+    // Cargar desde URL si hay gist compartido
+    const urlParams = new URLSearchParams(window.location.search);
+    const sharedGist = urlParams.get('gist');
+    if (sharedGist) {
+      loadFromGist(sharedGist);
+    }
   }, []);
 
   const loadDataFromStorage = () => {
@@ -105,6 +116,7 @@ export default function AulasAnalyzer() {
       const storedData = localStorage.getItem('aulas-data');
       const storedDateTime = localStorage.getItem('aulas-upload-date');
       const storedTurno = localStorage.getItem('aulas-turno');
+      const storedGistId = localStorage.getItem('aulas-gist-id');
       
       if (storedData) {
         const parsedData = JSON.parse(storedData);
@@ -116,6 +128,10 @@ export default function AulasAnalyzer() {
         
         if (storedTurno) {
           setSelectedTurno(storedTurno);
+        }
+
+        if (storedGistId) {
+          setGistId(storedGistId);
         }
         
         analyzeData(parsedData, storedTurno || 'todos');
@@ -134,6 +150,71 @@ export default function AulasAnalyzer() {
       localStorage.setItem('aulas-turno', turno);
     } catch (error) {
       console.error('Error al guardar datos:', error);
+    }
+  };
+
+  const saveToGist = async (jsonData, dateTime) => {
+    try {
+      const gistData = {
+        data: jsonData,
+        uploadDateTime: dateTime,
+        timestamp: new Date().toISOString()
+      };
+
+      // Crear o actualizar Gist público (sin auth, limitado pero funcional)
+      const url = gistId 
+        ? `https://api.github.com/gists/${gistId}`
+        : 'https://api.github.com/gists';
+      
+      const method = gistId ? 'PATCH' : 'POST';
+
+      const response = await fetch(url, {
+        method: method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          description: 'Datos de disponibilidad de aulas - ISAM',
+          public: true,
+          files: {
+            'aulas-data.json': {
+              content: JSON.stringify(gistData, null, 2)
+            }
+          }
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const newGistId = result.id;
+        setGistId(newGistId);
+        localStorage.setItem('aulas-gist-id', newGistId);
+        console.log('Datos guardados en Gist:', newGistId);
+      }
+    } catch (error) {
+      console.error('Error al guardar en Gist:', error);
+    }
+  };
+
+  const loadFromGist = async (id) => {
+    try {
+      const response = await fetch(`https://api.github.com/gists/${id}`);
+      if (response.ok) {
+        const gist = await response.json();
+        const content = gist.files['aulas-data.json'].content;
+        const gistData = JSON.parse(content);
+        
+        setData(gistData.data);
+        setUploadDateTime(gistData.uploadDateTime);
+        analyzeData(gistData.data, selectedTurno);
+        
+        saveDataToStorage(gistData.data, gistData.uploadDateTime, selectedTurno);
+        setGistId(id);
+        localStorage.setItem('aulas-gist-id', id);
+      }
+    } catch (error) {
+      console.error('Error al cargar desde Gist:', error);
+      alert('No se pudo cargar los datos compartidos');
     }
   };
 
@@ -189,7 +270,7 @@ export default function AulasAnalyzer() {
     };
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -216,7 +297,7 @@ export default function AulasAnalyzer() {
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
-        complete: (results) => {
+        complete: async (results) => {
           try {
             const cleanedData = results.data.map(row => {
               const cleanRow = {};
@@ -229,6 +310,7 @@ export default function AulasAnalyzer() {
             setData(cleanedData);
             analyzeData(cleanedData, selectedTurno);
             saveDataToStorage(cleanedData, fullDateTime, selectedTurno);
+            await saveToGist(cleanedData, fullDateTime);
           } catch (error) {
             alert('Error al procesar el archivo CSV: ' + error.message);
           } finally {
@@ -243,7 +325,7 @@ export default function AulasAnalyzer() {
     } else if (fileExtension === 'xls' || fileExtension === 'xlsx') {
       const reader = new FileReader();
 
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         try {
           const workbook = XLSX.read(event.target.result, { type: 'binary' });
           const sheetName = workbook.SheetNames[0];
@@ -253,6 +335,7 @@ export default function AulasAnalyzer() {
           setData(jsonData);
           analyzeData(jsonData, selectedTurno);
           saveDataToStorage(jsonData, fullDateTime, selectedTurno);
+          await saveToGist(jsonData, fullDateTime);
         } catch (error) {
           alert('Error al procesar el archivo Excel: ' + error.message);
         } finally {
@@ -309,10 +392,23 @@ export default function AulasAnalyzer() {
 
     const matrixData = sortedAulas.map(aula => {
       const row = { aula };
+      let totalClases = 0;
+      let diasLibres = 0;
+      let diasOcupados = 0;
+      
       sortedDates.forEach(dateInfo => {
         const count = aulasByDate[aula]?.[dateInfo.date] || 0;
         row[dateInfo.date] = count;
+        totalClases += count;
+        if (count === 0) diasLibres++;
+        else diasOcupados++;
       });
+      
+      row.totalClases = totalClases;
+      row.diasLibres = diasLibres;
+      row.diasOcupados = diasOcupados;
+      row.promedioDiario = sortedDates.length > 0 ? (totalClases / sortedDates.length).toFixed(1) : 0;
+      
       return row;
     });
 
@@ -327,22 +423,24 @@ export default function AulasAnalyzer() {
     if (!results) return;
 
     const wsData = [];
-    const header = ['Aula', ...results.dates.map(d => d.dayName + ' ' + d.date)];
+    const header = ['Aula', ...results.dates.map(d => d.dayName + ' ' + d.date), 'Total Clases', 'Días Libres', 'Días Ocupados', 'Promedio/Día'];
     wsData.push(header);
 
-    results.matrix.forEach(row => {
+    const filteredData = getFilteredMatrix();
+    filteredData.forEach(row => {
       const rowData = [row.aula];
       results.dates.forEach(dateInfo => {
         const count = row[dateInfo.date];
         rowData.push(count === 0 ? 'Libre' : count);
       });
+      rowData.push(row.totalClases, row.diasLibres, row.diasOcupados, row.promedioDiario);
       wsData.push(rowData);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Disponibilidad Aulas');
-    XLSX.writeFile(wb, 'disponibilidad_aulas.xlsx');
+    XLSX.writeFile(wb, 'disponibilidad_aulas_' + new Date().toISOString().split('T')[0] + '.xlsx');
   };
 
   const handleRefresh = () => {
@@ -353,6 +451,7 @@ export default function AulasAnalyzer() {
   const getCellStyle = (count) => {
     if (count === 0) return 'bg-green-100 text-green-800 font-semibold';
     if (count === 1) return 'bg-yellow-100 text-yellow-800';
+    if (count === 2) return 'bg-orange-100 text-orange-800';
     return 'bg-red-100 text-red-800';
   };
 
@@ -360,6 +459,52 @@ export default function AulasAnalyzer() {
     if (count === 0) return 'Libre';
     return count + ' clase' + (count > 1 ? 's' : '');
   };
+
+  const getFilteredMatrix = () => {
+    if (!results) return [];
+    
+    let filtered = results.matrix;
+    
+    // Filtro de búsqueda
+    if (searchTerm) {
+      filtered = filtered.filter(row => 
+        row.aula.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    // Filtro de estado
+    if (filterStatus === 'libres') {
+      filtered = filtered.filter(row => row.totalClases === 0);
+    } else if (filterStatus === 'ocupadas') {
+      filtered = filtered.filter(row => row.totalClases > 0);
+    } else if (filterStatus === 'disponibles') {
+      filtered = filtered.filter(row => row.diasLibres > 0 && row.totalClases > 0);
+    }
+    
+    return filtered;
+  };
+
+  const calculateStats = () => {
+    if (!results) return null;
+    
+    const totalAulas = results.matrix.length;
+    const aulasLibres = results.matrix.filter(row => row.totalClases === 0).length;
+    const aulasOcupadas = results.matrix.filter(row => row.totalClases > 0).length;
+    const totalClases = results.matrix.reduce((sum, row) => sum + row.totalClases, 0);
+    const promedioClasesPorAula = (totalClases / totalAulas).toFixed(1);
+    const aulasMasUsadas = [...results.matrix].sort((a, b) => b.totalClases - a.totalClases).slice(0, 5);
+    
+    return {
+      totalAulas,
+      aulasLibres,
+      aulasOcupadas,
+      totalClases,
+      promedioClasesPorAula,
+      aulasMasUsadas
+    };
+  };
+
+  const stats = calculateStats();
 
   if (loadingStorage) {
     return (
@@ -378,16 +523,30 @@ export default function AulasAnalyzer() {
         <div className="bg-white rounded-2xl shadow-2xl p-8">
           <div className="text-center mb-8">
             <h1 className="text-4xl font-bold text-gray-800 mb-2">
-              Matriz de Disponibilidad de Aulas
+              📊 Matriz de Disponibilidad de Aulas
             </h1>
             <p className="text-gray-600">
-              Vista completa de ocupación por aula y día
+              Vista completa de ocupación por aula y día - ISAM
             </p>
             {uploadDateTime && (
-              <div className="mt-4 flex items-center justify-center gap-3">
+              <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
                 <div className="inline-block bg-indigo-100 text-indigo-800 px-4 py-2 rounded-lg text-sm font-medium">
-                  📅 Información cargada el {uploadDateTime}
+                  <Calendar className="w-4 h-4 inline mr-2" />
+                  Actualizado: {uploadDateTime}
                 </div>
+                {gistId && (
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}${window.location.pathname}?gist=${gistId}`;
+                      navigator.clipboard.writeText(url);
+                      alert('¡Link copiado! Compártelo para que otros vean estos datos.');
+                    }}
+                    className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    Compartir
+                  </button>
+                )}
                 <button
                   onClick={handleRefresh}
                   className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
@@ -406,10 +565,13 @@ export default function AulasAnalyzer() {
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Upload className="w-12 h-12 text-indigo-500 mb-3" />
                   <p className="mb-2 text-lg font-semibold text-gray-700">
-                    Cargar archivo Excel
+                    Cargar archivo Excel o CSV
                   </p>
                   <p className="text-sm text-gray-500">
-                    Sube tu archivo CSV, XLS o XLSX con los datos de las reuniones
+                    Sube tu archivo con los datos de las reuniones
+                  </p>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Los datos se guardarán y se podrán compartir con otros usuarios
                   </p>
                 </div>
                 <input
@@ -431,41 +593,77 @@ export default function AulasAnalyzer() {
 
           {results && !loading && (
             <div>
-              <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
-                <div className="flex gap-4 items-center flex-wrap">
-                  <div className="flex gap-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
-                      <span>Libre (0 clases)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-yellow-100 border border-yellow-300 rounded"></div>
-                      <span>Disponible (1 clase)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-red-100 border border-red-300 rounded"></div>
-                      <span>Ocupado (2+ clases)</span>
-                    </div>
+              {/* Estadísticas */}
+              {showStats && stats && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="text-blue-600 text-sm font-medium">Total Aulas</div>
+                    <div className="text-2xl font-bold text-blue-900">{stats.totalAulas}</div>
                   </div>
-                  
-                  <div className="ml-0 lg:ml-6">
-                    <select
-                      value={selectedTurno}
-                      onChange={handleTurnoChange}
-                      className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="todos">Todos los turnos</option>
-                      <option value="manana">Mañana (7:00 - 13:00)</option>
-                      <option value="tarde">Tarde (13:01 - 16:50)</option>
-                      <option value="noche">Noche (17:00 - 24:00)</option>
-                    </select>
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="text-green-600 text-sm font-medium">Aulas Libres</div>
+                    <div className="text-2xl font-bold text-green-900">{stats.aulasLibres}</div>
+                  </div>
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                    <div className="text-red-600 text-sm font-medium">Aulas Ocupadas</div>
+                    <div className="text-2xl font-bold text-red-900">{stats.aulasOcupadas}</div>
+                  </div>
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                    <div className="text-purple-600 text-sm font-medium">Total Clases</div>
+                    <div className="text-2xl font-bold text-purple-900">{stats.totalClases}</div>
+                  </div>
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                    <div className="text-orange-600 text-sm font-medium">Promedio/Aula</div>
+                    <div className="text-2xl font-bold text-orange-900">{stats.promedioClasesPorAula}</div>
                   </div>
                 </div>
-                
-                <div className="flex gap-3">
-                  <label className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors cursor-pointer">
+              )}
+
+              {/* Controles y Filtros */}
+              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-6">
+                <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
+                  {/* Búsqueda */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar aula..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full sm:w-64"
+                    />
+                  </div>
+
+                  {/* Filtro de estado */}
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="todos">Todas las aulas</option>
+                    <option value="libres">Solo libres</option>
+                    <option value="ocupadas">Solo ocupadas</option>
+                    <option value="disponibles">Parcialmente disponibles</option>
+                  </select>
+
+                  {/* Filtro de turno */}
+                  <select
+                    value={selectedTurno}
+                    onChange={handleTurnoChange}
+                    className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="todos">Todos los turnos</option>
+                    <option value="manana">Mañana (7:00 - 13:00)</option>
+                    <option value="tarde">Tarde (13:01 - 16:50)</option>
+                    <option value="noche">Noche (17:00 - 24:00)</option>
+                  </select>
+                </div>
+
+                {/* Botones de acción */}
+                <div className="flex gap-3 w-full lg:w-auto">
+                  <label className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors cursor-pointer flex-1 lg:flex-initial justify-center">
                     <Upload className="w-4 h-4" />
-                    Cargar nuevo archivo
+                    <span className="hidden sm:inline">Cargar nuevo</span>
                     <input
                       type="file"
                       accept=".xlsx,.xls,.csv"
@@ -476,19 +674,48 @@ export default function AulasAnalyzer() {
                   
                   <button
                     onClick={exportToExcel}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex-1 lg:flex-initial justify-center"
                   >
                     <Download className="w-4 h-4" />
-                    Exportar a Excel
+                    <span className="hidden sm:inline">Exportar</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowStats(!showStats)}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                    title="Mostrar/Ocultar estadísticas"
+                  >
+                    <TrendingUp className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
+              {/* Leyenda */}
+              <div className="flex gap-4 text-sm mb-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
+                  <span>Libre (0)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-yellow-100 border border-yellow-300 rounded"></div>
+                  <span>1 clase</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-orange-100 border border-orange-300 rounded"></div>
+                  <span>2 clases</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-red-100 border border-red-300 rounded"></div>
+                  <span>3+ clases</span>
+                </div>
+              </div>
+
+              {/* Tabla */}
               <div className="overflow-x-auto border border-gray-200 rounded-lg">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="sticky left-0 z-10 px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gray-100 border-r-2 border-gray-300">
+                      <th className="sticky left-0 z-20 px-4 py-3 text-left text-xs font-bold text-gray-700 uppercase tracking-wider bg-gray-100 border-r-2 border-gray-300">
                         Aula
                       </th>
                       {results.dates.map((dateInfo, idx) => (
@@ -500,10 +727,13 @@ export default function AulasAnalyzer() {
                           <div className="text-gray-600">{dateInfo.date}</div>
                         </th>
                       ))}
+                      <th className="sticky right-0 z-10 px-4 py-3 text-center text-xs font-bold text-gray-700 uppercase tracking-wider bg-gray-100 border-l-2 border-gray-300">
+                        Total
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {results.matrix.map((row, rowIdx) => (
+                    {getFilteredMatrix().map((row, rowIdx) => (
                       <tr key={rowIdx} className="hover:bg-gray-50">
                         <td className="sticky left-0 z-10 px-4 py-3 text-sm font-medium text-gray-900 bg-white border-r-2 border-gray-200 whitespace-nowrap">
                           {row.aula}
@@ -513,31 +743,64 @@ export default function AulasAnalyzer() {
                           return (
                             <td
                               key={colIdx}
-                              className={'px-4 py-3 text-sm text-center ' + getCellStyle(count)}
+                              className={'px-4 py-3 text-sm text-center whitespace-nowrap ' + getCellStyle(count)}
                             >
                               {getCellText(count)}
                             </td>
                           );
                         })}
+                        <td className="sticky right-0 z-10 px-4 py-3 text-sm text-center font-bold bg-gray-50 border-l-2 border-gray-200">
+                          {row.totalClases}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
 
+              {/* Información adicional */}
               <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-gray-700">
-                  <strong>Total de aulas mostradas:</strong> {results.aulas.length} 
-                  <span className="text-gray-500 ml-1">(81 predefinidas + adicionales)</span> | 
-                  <strong className="ml-3">Total de días:</strong> {results.dates.length} |
-                  <strong className="ml-3">Turno activo:</strong> {
-                    selectedTurno === 'todos' ? 'Todos' :
-                    selectedTurno === 'manana' ? 'Mañana (7:00-13:00)' :
-                    selectedTurno === 'tarde' ? 'Tarde (13:01-16:50)' :
-                    'Noche (17:00-24:00)'
-                  }
-                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-700">
+                      <strong>Aulas mostradas:</strong> {getFilteredMatrix().length} de {results.aulas.length} |
+                      <strong className="ml-3">Días analizados:</strong> {results.dates.length} |
+                      <strong className="ml-3">Turno:</strong> {
+                        selectedTurno === 'todos' ? 'Todos' :
+                        selectedTurno === 'manana' ? 'Mañana' :
+                        selectedTurno === 'tarde' ? 'Tarde' : 'Noche'
+                      }
+                    </p>
+                  </div>
+                  {gistId && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-600">
+                        Datos sincronizados • Compartible con otros usuarios
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Aulas más usadas */}
+              {showStats && stats && stats.aulasMasUsadas.length > 0 && (
+                <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5" />
+                    Top 5 Aulas Más Usadas
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    {stats.aulasMasUsadas.map((aula, idx) => (
+                      <div key={idx} className="bg-white rounded-lg p-3 border border-yellow-300">
+                        <div className="text-xl font-bold text-yellow-600">#{idx + 1}</div>
+                        <div className="text-sm font-medium text-gray-700 truncate">{aula.aula}</div>
+                        <div className="text-lg font-bold text-gray-900">{aula.totalClases} clases</div>
+                        <div className="text-xs text-gray-500">{aula.promedioDiario} por día</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -549,23 +812,23 @@ export default function AulasAnalyzer() {
               <ul className="space-y-2 text-gray-700">
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span><strong>81 aulas predefinidas:</strong> La matriz siempre muestra las 81 aulas principales en orden específico</span>
+                  <span><strong>Carga tu archivo:</strong> Excel (.xlsx, .xls) o CSV con los datos de reuniones</span>
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span><strong>Verde (Libre):</strong> El aula no tiene clases programadas ese día en el turno seleccionado</span>
+                  <span><strong>Visualiza:</strong> Matriz completa con todos los días y disponibilidad por colores</span>
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span><strong>Amarillo (1 clase):</strong> El aula tiene solo 1 clase programada</span>
+                  <span><strong>Filtra:</strong> Por turno, estado (libres/ocupadas) o busca aulas específicas</span>
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span><strong>Rojo (2+ clases):</strong> El aula tiene 2 o más clases programadas</span>
+                  <span><strong>Comparte:</strong> Los datos se sincronizan y puedes compartir el link con otros</span>
                 </li>
                 <li className="flex items-start">
                   <span className="mr-2">•</span>
-                  <span><strong>Datos guardados localmente:</strong> Los datos se guardan en tu navegador y persisten entre sesiones</span>
+                  <span><strong>Exporta:</strong> Descarga la matriz en Excel con estadísticas completas</span>
                 </li>
               </ul>
             </div>
