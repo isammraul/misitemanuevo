@@ -14,6 +14,16 @@ export default function AulasAnalyzer() {
   const [filterStatus, setFilterStatus] = useState('todos');
   const [showStats, setShowStats] = useState(true);
   const [gistId, setGistId] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  
+  // ID del Gist principal
+  const MAIN_GIST_ID = '4eef79d272bdff63e7018c1c9803eb39';
+  
+  // URL del backend de Vercel (cambiar después del deploy)
+  const BACKEND_URL = 'https://tu-proyecto.vercel.app';
+  
+  // Clave de admin (debe coincidir con ADMIN_KEY en Vercel)
+  const ADMIN_KEY = 'mi_clave_secreta_123';
 
   const PREDEFINED_AULAS = [
     'isamzoom2022@gmail.com',
@@ -99,13 +109,23 @@ export default function AulasAnalyzer() {
   ];
 
   useEffect(() => {
-    loadDataFromStorage();
-    
-    // Cargar desde URL si hay gist compartido
+    // Verificar si es admin (mediante parámetro en URL)
     const urlParams = new URLSearchParams(window.location.search);
+    const adminParam = urlParams.get('admin');
     const sharedGist = urlParams.get('gist');
-    if (sharedGist) {
+    
+    if (adminParam === 'true') {
+      setIsAdmin(true);
+      loadDataFromStorage();
+    } else if (sharedGist) {
+      // Cargar desde URL si hay gist compartido
       loadFromGist(sharedGist);
+    } else if (MAIN_GIST_ID && MAIN_GIST_ID.trim() !== '') {
+      // Usuario normal: cargar automáticamente desde Gist principal configurado
+      loadFromGist(MAIN_GIST_ID);
+    } else {
+      // No hay Gist configurado aún
+      setLoadingStorage(false);
     }
   }, []);
 
@@ -155,49 +175,36 @@ export default function AulasAnalyzer() {
 
   const saveToGist = async (jsonData, dateTime) => {
     try {
-      const gistData = {
-        data: jsonData,
-        uploadDateTime: dateTime,
-        timestamp: new Date().toISOString()
-      };
-
-      // Crear o actualizar Gist público (sin auth, limitado pero funcional)
-      const url = gistId 
-        ? `https://api.github.com/gists/${gistId}`
-        : 'https://api.github.com/gists';
-      
-      const method = gistId ? 'PATCH' : 'POST';
-
-      const response = await fetch(url, {
-        method: method,
+      // Llamar al backend de Vercel
+      const response = await fetch(`${BACKEND_URL}/api/update-gist`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          description: 'Datos de disponibilidad de aulas - ISAM',
-          public: true,
-          files: {
-            'aulas-data.json': {
-              content: JSON.stringify(gistData, null, 2)
-            }
-          }
+          adminKey: ADMIN_KEY,
+          data: jsonData,
+          uploadDateTime: dateTime
         })
       });
 
       if (response.ok) {
         const result = await response.json();
-        const newGistId = result.id;
-        setGistId(newGistId);
-        localStorage.setItem('aulas-gist-id', newGistId);
-        console.log('Datos guardados en Gist:', newGistId);
+        alert('✅ ¡Datos actualizados automáticamente!\n\nTodos los usuarios verán la información actualizada.');
+        console.log('✅ Gist actualizado:', result);
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Error al actualizar');
       }
     } catch (error) {
-      console.error('Error al guardar en Gist:', error);
+      console.error('❌ Error al actualizar Gist:', error);
+      alert('❌ Error al actualizar los datos: ' + error.message);
     }
   };
 
   const loadFromGist = async (id) => {
     try {
+      setLoadingStorage(true);
       const response = await fetch(`https://api.github.com/gists/${id}`);
       if (response.ok) {
         const gist = await response.json();
@@ -208,13 +215,20 @@ export default function AulasAnalyzer() {
         setUploadDateTime(gistData.uploadDateTime);
         analyzeData(gistData.data, selectedTurno);
         
-        saveDataToStorage(gistData.data, gistData.uploadDateTime, selectedTurno);
+        // Solo guardar en localStorage si es admin
+        if (isAdmin) {
+          saveDataToStorage(gistData.data, gistData.uploadDateTime, selectedTurno);
+        }
+        
         setGistId(id);
-        localStorage.setItem('aulas-gist-id', id);
+      } else {
+        throw new Error('Gist no encontrado');
       }
     } catch (error) {
       console.error('Error al cargar desde Gist:', error);
-      alert('No se pudo cargar los datos compartidos');
+      // No mostrar error si no hay datos aún
+    } finally {
+      setLoadingStorage(false);
     }
   };
 
@@ -527,6 +541,11 @@ export default function AulasAnalyzer() {
             <p className="text-gray-600">
               Vista completa de ocupación por aula y día - ISAM
             </p>
+            {isAdmin && (
+              <div className="mt-3 inline-block bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-2 rounded-lg text-sm font-medium">
+                🔑 Modo Administrador - Puedes subir y publicar datos
+              </div>
+            )}
             {uploadDateTime && (
               <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
                 <div className="inline-block bg-indigo-100 text-indigo-800 px-4 py-2 rounded-lg text-sm font-medium">
@@ -538,12 +557,13 @@ export default function AulasAnalyzer() {
                     onClick={() => {
                       const url = `${window.location.origin}${window.location.pathname}?gist=${gistId}`;
                       navigator.clipboard.writeText(url);
-                      alert('¡Link copiado! Compártelo para que otros vean estos datos.');
+                      alert(`✅ Link copiado al portapapeles!\n\n${url}\n\nCompártelo para que otros vean estos datos específicos.`);
                     }}
                     className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+                    title="Copiar enlace para compartir estos datos"
                   >
                     <Share2 className="w-4 h-4" />
-                    Compartir
+                    Compartir Link
                   </button>
                 )}
                 <button
@@ -560,26 +580,38 @@ export default function AulasAnalyzer() {
 
           {!results && !loading && (
             <div className="mb-8">
-              <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-indigo-300 rounded-xl cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition-all">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <Upload className="w-12 h-12 text-indigo-500 mb-3" />
-                  <p className="mb-2 text-lg font-semibold text-gray-700">
-                    Cargar archivo Excel o CSV
+              {isAdmin ? (
+                <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-indigo-300 rounded-xl cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition-all">
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <Upload className="w-12 h-12 text-indigo-500 mb-3" />
+                    <p className="mb-2 text-lg font-semibold text-gray-700">
+                      Cargar archivo Excel o CSV
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Sube tu archivo con los datos de las reuniones
+                    </p>
+                    <p className="text-xs text-gray-400 mt-2">
+                      Los datos se publicarán automáticamente para todos los usuarios
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              ) : (
+                <div className="flex flex-col items-center justify-center p-8 bg-gray-50 rounded-xl border border-gray-200">
+                  <Calendar className="w-16 h-16 text-gray-400 mb-4" />
+                  <p className="text-lg font-semibold text-gray-700 mb-2">
+                    No hay datos disponibles
                   </p>
-                  <p className="text-sm text-gray-500">
-                    Sube tu archivo con los datos de las reuniones
-                  </p>
-                  <p className="text-xs text-gray-400 mt-2">
-                    Los datos se guardarán y se podrán compartir con otros usuarios
+                  <p className="text-sm text-gray-500 text-center">
+                    El administrador aún no ha publicado la información de disponibilidad de aulas.
                   </p>
                 </div>
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </label>
+              )}
             </div>
           )}
 
