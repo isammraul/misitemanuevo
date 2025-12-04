@@ -19,8 +19,8 @@ export default function AulasAnalyzer() {
   // ID del Gist principal
   const MAIN_GIST_ID = '4eef79d272bdff63e7018c1c9803eb39';
   
-  // URL del backend de Vercel (sin el guion final ni subdominios de preview)
-  const BACKEND_URL = 'https://aulas-isammraul.vercel.app';
+  // URL del backend de Vercel
+  const BACKEND_URL = 'https://aulas-vert.vercel.app';
   
   // Clave de admin (debe coincidir con ADMIN_KEY en Vercel)
   const ADMIN_KEY = 'mi_clave_secreta_123';
